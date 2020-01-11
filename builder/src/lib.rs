@@ -21,26 +21,56 @@ pub fn derive(input: TokenStream) -> TokenStream {
     } else {
         unimplemented!();
     };
+   
     let optionized = fields.iter().map(|f| {
         let name = &f.ident;
         let ty = &f.ty;
-        quote! { #name: std::option::Option<#ty> }
+        if ty_inner_type("Option", ty).is_some() {
+            quote! { #name: #ty }
+        } else {
+            quote! { #name: std::option::Option<#ty> }
+        }
     });
     let methods = fields.iter().map(|f| {
-        let name = &f.ident;
+        let name = f.ident.as_ref().unwrap();
         let ty = &f.ty;
-        quote! {
-            pub fn #name(&mut self, #name: #ty) -> &mut Self {
-                self.#name = Some(#name);
-                self
+        if let Some(inner_ty) = ty_inner_type("Option", ty) {
+            quote! {
+                pub fn #name(&mut self, #name: #inner_ty) -> &mut Self {
+                    self.#name = #name;
+                    self
+                }
+            }
+        } else {
+            quote! {
+                pub fn #name(&mut self, #name: #ty) -> &mut Self {
+                    self.#name = Some(#name);
+                    self
+                }
             }
         }
     });
+    /*
+    let extend_methods = fields.iter().map(|f| {
+        for attr in &f.attrs {
+            if attr.path.segments.len() == 1 && attr.path.segments[0].ident == "builder" {
+
+            }
+            eprintln!("{:#?}", f.attrs);
+        }
+        None
+    });
+    */
     let build_fields = fields.iter().map(|f| {
         let name = &f.ident;
-        let _ty = &f.ty;
-        quote! {
-            #name: self.#name.clone().ok_or(concat!(stringify!(#name), " is not set"))?
+        if ty_inner_type("Option", &f.ty).is_some() {
+            quote! {
+                #name: self.#name.clone()
+            }
+        } else {
+            quote! {
+                #name: self.#name.clone().ok_or(concat!(stringify!(#name), " is not set"))?
+            }
         }
     });
     let build_empty = fields.iter().map(|f| {
@@ -54,6 +84,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
         impl #bident {
             #(#methods)*
+            //#(#extend_methods)*
 
             pub fn build(&mut self) -> Result<#name, Box<dyn std::error::Error>> {
                 Ok(#name {
@@ -72,4 +103,25 @@ pub fn derive(input: TokenStream) -> TokenStream {
     };
 
     expanded.into()
+}
+
+fn ty_inner_type<'a>(wrapper: &str, ty: &'a syn::Type) -> Option<&'a syn::Type> {
+    if let syn::Type::Path(ref p) = ty {
+
+        if !p.path.segments.len() != 1 || p.path.segments[0].ident != wrapper {
+            return None;
+        }
+
+        if let syn::PathArguments::AngleBracketed(ref inner_ty) = p.path.segments[0].arguments {
+            if inner_ty.args.len() != 1 {
+                return None;
+            }
+
+            let inner_ty = inner_ty.args.first().unwrap();
+            if let syn::GenericArgument::Type(ref t) = inner_ty {
+                return Some(t);
+            }
+        }
+    }
+    None
 }
